@@ -1,0 +1,72 @@
+services:
+  spark:
+    image: spark:4.2.0-scala2.13-java25-python3-ubuntu
+    container_name: spark
+    ports:
+      - "4040:4040"
+    volumes:
+      - ./code:/code
+      - ./jars/postgresql-42.7.3.jar:/opt/spark/jars/postgresql-42.7.3.jar
+    entrypoint: ["/bin/bash"]
+    command: ["-c", "tail -f /dev/null"]
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=analyst
+      - POSTGRES_PASSWORD=analyst_pwd
+      - POSTGRES_DB=nyc_taxi_dwh
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyst -d nyc_taxi_dwh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  superset-init:
+    image: apache/superset:3.0.0
+    container_name: superset_init
+    user: "root"
+    environment:
+      - SUPERSET_SECRET_KEY=a_very_secret_key_change_me_in_prod
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://analyst:analyst_pwd@postgres:5432/nyc_taxi_dwh
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: [ "/bin/sh", "-c" ]
+    command:
+      - |
+        pip install psycopg2-binary
+        superset db upgrade
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin
+        superset init
+
+  superset:
+    image: apache/superset:3.0.0
+    container_name: superset
+    user: "root"
+    environment:
+      - SUPERSET_SECRET_KEY=a_very_secret_key_change_me_in_prod
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://analyst:analyst_pwd@postgres:5432/nyc_taxi_dwh
+    ports:
+      - "8088:8088"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+      spark:
+        condition: service_started
+    command: ["/bin/sh", "-c", "pip install psycopg2-binary && superset run -p 8088 --with-threads --reload --debugger -h 0.0.0.0"]
+    volumes:
+      - superset_home:/app/superset_home
+
+volumes:
+  code:
+  postgres_data:
+  superset_home:
